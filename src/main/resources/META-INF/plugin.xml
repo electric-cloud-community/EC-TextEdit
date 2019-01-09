@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin>
+    <key>@PLUGIN_KEY@</key>
+    <version>@PLUGIN_VERSION@</version>
+    <label>@PLUGIN_KEY@</label>
+    <description>TextEdit Integration</description>
+    <author>Electric Cloud</author>
+    <authorUrl>http://www.electric-cloud.com/support</authorUrl>
+    <category>Utility</category>
+    <commander-version min="3.6"/>
+    <help>EC-TextEdit_help.xml</help>
+    <components>
+        <component name="ReplaceParameterPanel">
+            <javascript>war/ecplugins.textedit.ReplaceParameterPanel/ecplugins.textedit.ReplaceParameterPanel.nocache.js</javascript>
+        </component>
+        <component name="ExtractParameterPanel">
+            <javascript>war/ecplugins.textedit.ExtractParameterPanel/ecplugins.textedit.ExtractParameterPanel.nocache.js</javascript>
+        </component>
+        <component name="FindParameterPanel">
+            <javascript>war/ecplugins.textedit.FindParameterPanel/ecplugins.textedit.FindParameterPanel.nocache.js</javascript>
+        </component>
+        <component name="AddParameterPanel">
+            <javascript>war/ecplugins.textedit.AddParameterPanel/ecplugins.textedit.AddParameterPanel.nocache.js</javascript>
+        </component>
+    </components>
+    <customTypes>
+        <customType name="Replace">
+            <parameterPanel>
+                <javascript>war/ecplugins.textedit.ReplaceParameterPanel/ecplugins.textedit.ReplaceParameterPanel.nocache.js</javascript>
+                <help>/commander/pages/@PLUGIN_KEY@-@PLUGIN_VERSION@/EC-TextEdit_help?s=Administration&amp;ss=Plugins#ReplaceText
+                </help>
+            </parameterPanel>
+        </customType>
+        <customType name="Extract">
+            <parameterPanel>
+                <javascript>war/ecplugins.textedit.ExtractParameterPanel/ecplugins.textedit.ExtractParameterPanel.nocache.js</javascript>
+                <help>/commander/pages/@PLUGIN_KEY@-@PLUGIN_VERSION@/EC-TextEdit_help?s=Administration&amp;ss=Plugins#ExtractText
+                </help>
+            </parameterPanel>
+        </customType>
+        <customType name="Find">
+            <parameterPanel>
+                <javascript>war/ecplugins.textedit.FindParameterPanel/ecplugins.textedit.FindParameterPanel.nocache.js</javascript>
+                <help>/commander/pages/@PLUGIN_KEY@-@PLUGIN_VERSION@/EC-TextEdit_help?s=Administration&amp;ss=Plugins#FindText
+                </help>
+            </parameterPanel>
+        </customType>
+        <customType name="Add">
+            <parameterPanel>
+                <javascript>war/ecplugins.textedit.AddParameterPanel/ecplugins.textedit.AddParameterPanel.nocache.js</javascript>
+                <help>/commander/pages/@PLUGIN_KEY@-@PLUGIN_VERSION@/EC-TextEdit_help?s=Administration&amp;ss=Plugins#AddText
+                </help>
+            </parameterPanel>
+        </customType>
+    </customTypes>
+</plugin>

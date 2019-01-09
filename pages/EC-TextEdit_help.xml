@@ -1,0 +1,360 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+    "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta name="generator" content=
+  "HTML Tidy for Windows (vers 25 March 2009), see www.w3.org" />
+  <meta content="text/html; charset=us-ascii" http-equiv=
+  "content-type" />
+
+  <title>ElectricFlow Plugin for Text Edit</title>
+  <link rel="stylesheet" href=
+  "../../plugins/@PLUGIN_KEY@/pluginhelp.css" type="text/css"
+  media="screen" />
+</head>
+
+<body>
+  <div class="help">
+    <h1>Text Edit</h1>
+
+    <p>Plugin Version @PLUGIN_VERSION@</p>
+    <hr style=
+    "margin-left: -10px; margin-top: 10px; height: 1px; width: 100%; color: #5981BD;"
+    noshade="noshade" />
+    <!-- The tool description should answer these kinds of questions:
+What is the tool itself is used for in the development
+process? Who would use this tool? What is the general use-case or
+problem that this tool solves? Look at the tool's documentation or
+website(s) to get their own descriptions. Look at Wikipedia or other
+outside websites. If there is a Hudson plugin, read their
+documentation for ideas, examples, etc. It's OK to copy word-for-word
+only if appropriate, such as FOSS - but not commercial software.
+-->
+
+    <p>A text editor is program that allows you to open, view, and
+    edit plain text files. Unlike word processors, text editors do
+    not add formatting to text, instead focusing on editing
+    functions for plain text. Text editors are used by a wide
+    variety of people, for a wide variety of purposes.</p>
+
+    <h2>ElectricFlow Integration for Text Edit</h2>
+    <!-- The integration description should answer the questions:
+How deep does our integration go? Why should I care? What general
+functionality does the plugin include? What functionality does
+the plugin omit?
+-->
+
+    <p>The plugin uses PERL and Regular Expressions to perform the
+    following tasks:</p>
+
+    <ul>
+      <li>Replace text in File.</li>
+
+      <li>Replace text in Multiple Files.</li>
+
+      <li>Add Text to a File.</li>
+
+      <li>Extract Text from a File.</li>
+
+      <li>Find text in file.</li>
+
+      <li>Find text in Multiple Files.</li>
+    </ul>
+
+    <h2>Integrated Version</h2>
+
+    <p>ElectricFlow minimum version 3.6</p>
+
+    <h1>Plugin Procedures</h1>
+
+    <p>IMPORTANT: For all parameter descriptions below, required
+    parameters are shown in <span class='required'>bold
+    italics</span>.</p>
+
+    <div id="AddText"><a name='AddText' id="AddText"></a>
+
+    <h3>AddText</h3>
+
+    <p>This procedure allows users to insert text in a file, at a
+    given point, by search, at the beginning or at the end.</p>
+
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+
+          <th>Description</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <tr>
+          <td class="required">File path</td>
+
+          <td>Path to the file to use. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Text</td>
+
+          <td>Text to insert in the file. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Insertion point:</td>
+
+          <td>Select where to add the text: At the End, At the
+          Beginning, By Search(After). (Required)</td>
+        </tr>
+
+        <tr>
+          <td>Search</td>
+
+          <td>Text to search, after which 'Text' will be added.
+          (Required if: Insertion point is By Search(After))</td>
+        </tr>
+
+        <tr>
+          <td>Regular Expression?:</td>
+
+          <td>Search using text or regular expressions. 'Search'
+          will be treated as normal text or a regular
+          expression.(Required if: Insertion point is By
+          Search(After))</td>
+        </tr>
+      </tbody>
+    </table><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/parameters/add.png" /></div>
+
+    <div id="ExtractText"><a name="ExtractText" id=
+    "ExtractText"></a>
+
+    <h3>ExtractText</h3>
+
+    <p>This procedure allows users to extract Text from a file
+    based on Regular Expression.<br />
+    Matches will be saved in properties, the procedure will store
+    the results in "Result Property". If the "Result Property"
+    field is blank, the default location in the job is used:
+    /myJob/TextEdit/$[jobStepId]/.</p>
+
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+
+          <th>Description</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <tr>
+          <td class="required">File path</td>
+
+          <td>Path to the file to use. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Regular Expression</td>
+
+          <td>Regular Expression to evaluate. (Required)</td>
+        </tr>
+
+        <tr>
+          <td>Result Property</td>
+
+          <td>Path to the property to save results (default is
+          /myJob/TextEdit/$[jobStepId]/).</td>
+        </tr>
+      </tbody>
+    </table><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/parameters/extract.png" /></div>
+
+    <div id="FindText"><a name="FindText" id="FindText"></a>
+
+    <h3>FindText</h3>
+
+    <p>This procedure allows users to find text in one or more
+    files. The user can choose to search by regular expressions or
+    normal text.</p>
+
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+
+          <th>Description</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <tr>
+          <td class="required">Search Mode</td>
+
+          <td>Search using text or regular expressions. 'Find' will
+          be treated as normal text or a regular expression.
+          (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Find</td>
+
+          <td>Text to find in the file. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Search In</td>
+
+          <td>Select where to look. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">File path</td>
+
+          <td>Path to the file(s) to use. If multiple files
+          separate paths with semicolon. (Required)</td>
+        </tr>
+
+        <tr>
+          <td>Filters</td>
+
+          <td>Filter file names and/or extensions (default is
+          *.*).</td>
+        </tr>
+
+        <tr>
+          <td>Match Case</td>
+
+          <td>Match case of text to find.</td>
+        </tr>
+      </tbody>
+    </table><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/parameters/find.png" /></div>
+
+    <div id="ReplaceText"><a name="ReplaceText" id=
+    "ReplaceText"></a>
+
+    <h3>ReplaceText</h3>
+
+    <p>This procedure allows users to find and replace text in one
+    or more files.</p>
+
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+
+          <th>Description</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <tr>
+          <td class="required">Search Mode</td>
+
+          <td>Select the search mode. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Find</td>
+
+          <td>Text to find. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Replace</td>
+
+          <td>Replacement text. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">Search In</td>
+
+          <td>Select where to look. (Required)</td>
+        </tr>
+
+        <tr>
+          <td class="required">File path</td>
+
+          <td>Path to the file(s) to use. If multiple files
+          separate paths with semicolon. (Required)</td>
+        </tr>
+
+        <tr>
+          <td>Filters</td>
+
+          <td>Filter file names and/or extensions(default is
+          *.*).</td>
+        </tr>
+
+        <tr>
+          <td>Match Case</td>
+
+          <td>Match case of text.</td>
+        </tr>
+      </tbody>
+    </table><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/parameters/replace.png" /></div>
+
+    <h1>Use Cases and Examples</h1>
+    <!-- This section is for examples and use cases, including screenshots of the new Parameter Panel with example values filled in.
+Unfortunately, I can't tell you what exactly to put here, but it's OK to put what seems like too much! Include both parameter
+values and output where appropriate. Use a separate 'h2' header for each example. Under the h2 header try to stay with the style
+outline used above where possible.
+-->
+
+    <h2>Example 1: Replace Text in all files inside a folder</h2>
+
+    <h4>ReplaceText</h4>
+
+    <p>Create a new ReplaceText procedure, fill in the requested
+    parameters with real values:</p><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/examples/replace_params.png" />
+
+    <p>Once the job finished, you can see the results.<br />
+    <img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/examples/replace_job.png" /></p>
+
+    <p>Procedure output:</p><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/examples/replace_log.png" />
+
+    <h2>Example 2: Find Text in a single file using a regular
+    expression</h2>
+
+    <h4>FindText</h4>
+
+    <p>Create a new FindText procedure, fill in the requested
+    parameters with real values:</p><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/examples/find_params.png" />
+
+    <p>Once the job finished, you can see the results.<br />
+    <img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/examples/find_job.png" /></p>
+
+    <p>Procedure output:</p><img alt="" src=
+    "../../plugins/@PLUGIN_KEY@/images/examples/find_log.png" />
+
+    <h1>Release Notes</h1>
+
+    <h2>EC-TextEdit-1.0.0</h2>
+
+    <ul>
+      <li>Procedures: AddText, ExtractText, FindText and
+      ReplaceText.</li>
+
+      <li>Implemented GWT parameter panels</li>
+
+      <li>Created Help Page.</li>
+    </ul>
+
+    <h2>EC-TextEdit-1.0.1</h2>
+
+    <ul>
+      <li>Applied code template.</li>
+
+      <li>Improved systemtests.</li>
+    </ul>
+  </div>
+</body>
+</html>

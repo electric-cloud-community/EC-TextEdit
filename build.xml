@@ -1,0 +1,14 @@
+<project name="EC-TextEdit" default="package" basedir=".">
+    <description>
+        Build the EC-TextEdit plugin
+    </description>
+
+    <property name="buildconfigdir" value="../Plugin-In-A-Box/scripts" />
+
+    <!-- plugin specific properties -->
+    <property name="pluginKey" value="EC-TextEdit" />
+    <property name="pluginVersion" value="1.0" />
+    <property name="gwtModules" value="ecplugins.textedit.ReplaceParameterPanel,ecplugins.textedit.ExtractParameterPanel,ecplugins.textedit.FindParameterPanel,ecplugins.textedit.AddParameterPanel"/>
+
+    <import file="${buildconfigdir}/buildTargets.xml"/>
+</project>

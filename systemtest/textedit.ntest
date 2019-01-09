@@ -1,0 +1,2551 @@
+# -*-Perl-*-
+
+# textedit.ntest -
+#
+# System tests for EC-TextEdit plugin
+#
+# Copyright (c) 2005-2011 Electric Cloud, Inc.
+# All rights reserved
+
+use strict;
+use ECTest;
+use ECSelenium;
+use Socket;
+use Sys::Hostname;
+use File::Copy::Recursive qw(dircopy);
+use File::Find;
+
+# read in setup and tests that are common to all plugins
+# system tests
+require "$::gTestFileDir/ntest.common";
+
+$::gProjectImported = 0;
+$::gDataCopied = 0;
+$::gtestProjectName = 'TextEdit-Tests';
+
+$::gRunTest = 0;
+
+sub importProject() {
+    assertOK(
+             $::N->import(
+                          {
+                            file  => "$::gTestFileDir/TextEdit-tests.xml",
+                            path  => "/projects/TextEdit-tests",
+                            force => 1
+                          }
+                         ),
+             "import TextEdit-tests project"
+            );
+
+    assertOK($::N->getProcedure($::gtestProjectName, '01. Replace with all parameters'), "Procedure: 01. Replace with all parameters exists");
+
+    assertOK($::N->getProcedure($::gtestProjectName, '02. Replace with required parameters'), "Procedure: 02. Replace with required parameters exists");
+
+    # assertOK( $::N->getProcedure( $::gtestProjectName, 'CleanUp' ),
+    # "CleanUp procedure exists" );
+
+    # assertOK( $::N->getProcedure( $::gtestProjectName, 'Clone' ),
+    # "Clone procedure exists" );
+
+    $::gProjectImported = 1;
+}
+
+sub doSetup() {
+
+    if (!$::gProjectImported) {
+        importProject();
+    }
+
+    if (!$::gDataCopied) {
+    # create files/dirs in the test output dir for manipulation
+    # by tests.
+        dircopy("$::gTestFileDir/backup", "$::gTestFileDir/testdata");
+        find(sub { chmod 0776, $File::Find::name; }, "$::gTestFileDir/testdata/");
+
+        $::gDataCopied = 1;
+    }
+    
+}
+
+################################
+# check-components-present - Check that the plugin contains required components
+#
+# Arguments:
+#   none
+#
+# Returns:
+#   none
+#
+################################
+
+ntest 'check-components-present', {}, sub {
+
+    # Check that the plugin contains required components
+
+    my $xpath;
+    $xpath = $::N->getSteps("$::gPlugin_name", "AddText");
+    assertOK($xpath, "AddText");
+    assertEq("AddText", $xpath->findvalue("//step[1]/stepName"), "Step 1 is AddText");
+
+    $xpath = $::N->getSteps("$::gPlugin_name", "ExtractText");
+    assertOK($xpath, "ExtractText");
+    assertEq("ExtractText", $xpath->findvalue("//step[1]/stepName"), "Step 1 is ExtractText");
+
+    $xpath = $::N->getSteps("$::gPlugin_name", "FindText");
+    assertOK($xpath, "FindText");
+    assertEq("FindText", $xpath->findvalue("//step[1]/stepName"), "Step 1 is FindText");
+
+    $xpath = $::N->getSteps("$::gPlugin_name", "ReplaceText");
+    assertOK($xpath, "ReplaceText");
+    assertEq("ReplaceText", $xpath->findvalue("//step[1]/stepName"), "step 1 is ReplaceText");
+
+};
+
+################################
+# Eval TextEditDriver - Test loading TextEdit driver
+#
+# Arguments:
+#   none
+#
+# Returns:
+#   none
+#
+################################
+ntest "Eval TextEditDriver", {}, sub {
+    use ElectricCommander::PropMod;
+
+    # Load perl code from running Commander
+    ElectricCommander::PropMod::loadPerlCodeFromProperty($::N, "/projects/$::gPlugin_name/driver/TextEditDriver");
+    my $textedit = new TextEditDriver();
+};
+
+ntest "01. Replace with all parameters", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "01. Replace with all parameters",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "ipsum"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace/lorem_1.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Electric-Cloud"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='01.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: ipsum\n";
+    $expectedOutput .= "Replacement: Electric-Cloud\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_1.txt \n";
+    $expectedOutput .= "DONE! - Replaced 7 occurrence(s) of 'ipsum'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '01. Replace with all parameters successful output');
+};
+
+ntest "02. Replace with required parameters", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "02. Replace with required parameters",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "Lorem"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace/lorem_1.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Electric-Cloud"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='02.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='02.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: Lorem\n";
+    $expectedOutput .= "Replacement: Electric-Cloud\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_1.txt \n";
+    $expectedOutput .= "DONE! - Replaced 4 occurrence(s) of 'Lorem'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '02. Replace with required parameters successful output');
+};
+
+ntest "03. Replace Single", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "03. Replace Single",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "Ut"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace/lorem_3.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Single"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='03.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='03.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: Ut\n";
+    $expectedOutput .= "Replacement: Single\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_3.txt \n";
+    $expectedOutput .= "DONE! - Replaced 16 occurrence(s) of 'Ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '03. Replace Single successful output');
+};
+
+ntest "04. Replace Multiple", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "04. Replace Multiple",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "Ut"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace/lorem_4.txt;$::gTestFileDir/testdata/replace/lorem_5.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Multiple"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='04.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='04.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: multiple\n";
+    $expectedOutput .= "Looking for: Ut\n";
+    $expectedOutput .= "Replacement: Multiple\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_4.txt \n";
+    $expectedOutput .= "DONE! - Replaced 16 occurrence(s) of 'Ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_5.txt \n";
+    $expectedOutput .= "DONE! - Replaced 16 occurrence(s) of 'Ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '04. Replace Multiple successful output');
+};
+
+ntest "05. Replace Multiple with match case", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "05. Replace Multiple with match case",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "ut"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace/lorem_7.ec;$::gTestFileDir/testdata/replace/lorem_5.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Multiple"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='05.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='05.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: multiple\n";
+    $expectedOutput .= "Looking for: ut\n";
+    $expectedOutput .= "Replacement: Multiple\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_7.ec \n";
+    $expectedOutput .= "DONE! - Replaced 15 occurrence(s) of 'ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_5.txt \n";
+    $expectedOutput .= "DONE! - Replaced 0 occurrence(s) of 'ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '05. Replace Multiple with match case successful output');
+};
+
+ntest "06. Replace Single Regex", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "06. Replace Single Regex",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "pelle.{4}que"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace/lorem_6.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Single"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replaceback',
+                                                             value               => "pellentesque"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='06.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='06.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: regex\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: pelle.{4}que\n";
+    $expectedOutput .= "Replacement: Single\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_6.txt \n";
+    $expectedOutput .= "DONE! - Replaced 4 occurrence(s) of 'pelle.{4}que'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '06. Replace Single Regex successful output');
+};
+
+ntest "07. Replace Folder without filter", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "07. Replace Folder without filter",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "et"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Folder"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='07.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='07.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: folder\n";
+    $expectedOutput .= "Filter: *.*\n";
+    $expectedOutput .= "Looking for: et\n";
+    $expectedOutput .= "Replacement: Folder\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_1.txt \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_2.txt \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_3.txt \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_4.txt \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_5.txt \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_6.txt \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_7.ec \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_8.ec \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_9.ec \n";
+    $expectedOutput .= "DONE! - Replaced 49 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '07. Replace Folder without filter successful output');
+};
+
+ntest "08. Replace Folder with filter txt", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "08. Replace Folder with filter txt",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "In"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/replace"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'replace',
+                                                             value               => "Folder"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='08.replace']/calledProcedure/jobStep[stepName='ReplaceText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='08.replace']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ReplaceText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: folder\n";
+    $expectedOutput .= "Filter: *.txt\n";
+    $expectedOutput .= "Looking for: In\n";
+    $expectedOutput .= "Replacement: Folder\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_1.txt \n";
+    $expectedOutput .= "DONE! - Replaced 27 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_2.txt \n";
+    $expectedOutput .= "DONE! - Replaced 27 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_3.txt \n";
+    $expectedOutput .= "DONE! - Replaced 27 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_4.txt \n";
+    $expectedOutput .= "DONE! - Replaced 27 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_5.txt \n";
+    $expectedOutput .= "DONE! - Replaced 27 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/replace/lorem_6.txt \n";
+    $expectedOutput .= "DONE! - Replaced 27 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '08. Replace Folder with filter txt successful output');
+};
+
+ntest "09. Find with all parameters", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "09. Find with all parameters",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "ipsum"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_1.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='09.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='09.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: ipsum\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_1.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Phasellus ullamcorper ipsum rutrum nunc., at line 43\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 7 occurrence(s) of 'ipsum'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '09. Find with all parameters successful output');
+};
+
+ntest "10. Find with required parameters", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "10. Find with required parameters",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "Lorem"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_1.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='10.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='10.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: Lorem\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_1.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "DONE! - Found 4 occurrence(s) of 'Lorem'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '10. Find with required parameters successful output');
+};
+
+ntest "11. Find Single", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "11. Find Single",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "Ut"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_3.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='11.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='11.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: Ut\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_3.txt \n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Aenean vulputate eleifend tellus., at line 13\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Quisque rutrum., at line 17\n";
+    $expectedOutput .= "Match found: Donec vitae sapien ut libero venenatis faucibus., at line 26\n";
+    $expectedOutput .= "Match found: Fusce vulputate eleifend sapien., at line 33\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Phasellus ullamcorper ipsum rutrum nunc., at line 43\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Donec posuere vulputate arcu., at line 59\n";
+    $expectedOutput .= "Match found: Donec elit libero, sodales nec, volutpat a, suscipit non, turpis., at line 69\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 16 occurrence(s) of 'Ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '11. Find Single successful output');
+};
+
+ntest "12. Find Single Regex", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "12. Find Single Regex",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "pelle.{4}que"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_6.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='12.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='12.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: regex\n";
+    $expectedOutput .= "Searching In: single\n";
+    $expectedOutput .= "Looking for: pelle.{4}que\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_6.txt \n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Pellentesque posuere., at line 66\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "DONE! - Found 4 occurrence(s) of 'pelle.{4}que'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '12. Find Single Regex successful output');
+};
+
+ntest "13. Find Multiple", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "13. Find Multiple",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "Ut"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_4.txt;$::gTestFileDir/testdata/find/lorem_5.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='13.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='13.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: multiple\n";
+    $expectedOutput .= "Looking for: Ut\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_4.txt \n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Aenean vulputate eleifend tellus., at line 13\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Quisque rutrum., at line 17\n";
+    $expectedOutput .= "Match found: Donec vitae sapien ut libero venenatis faucibus., at line 26\n";
+    $expectedOutput .= "Match found: Fusce vulputate eleifend sapien., at line 33\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Phasellus ullamcorper ipsum rutrum nunc., at line 43\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Donec posuere vulputate arcu., at line 59\n";
+    $expectedOutput .= "Match found: Donec elit libero, sodales nec, volutpat a, suscipit non, turpis., at line 69\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 16 occurrence(s) of 'Ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_5.txt \n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Aenean vulputate eleifend tellus., at line 13\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Quisque rutrum., at line 17\n";
+    $expectedOutput .= "Match found: Donec vitae sapien ut libero venenatis faucibus., at line 26\n";
+    $expectedOutput .= "Match found: Fusce vulputate eleifend sapien., at line 33\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Phasellus ullamcorper ipsum rutrum nunc., at line 43\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Donec posuere vulputate arcu., at line 59\n";
+    $expectedOutput .= "Match found: Donec elit libero, sodales nec, volutpat a, suscipit non, turpis., at line 69\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 16 occurrence(s) of 'Ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '13. Find Multiple successful output');
+};
+
+ntest "14. Find Multiple with match case", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "14. Find Multiple with match case",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "ut"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_7.ec;$::gTestFileDir/testdata/find/lorem_5.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='14.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='14.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: multiple\n";
+    $expectedOutput .= "Looking for: ut\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_7.ec \n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Aenean vulputate eleifend tellus., at line 13\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Quisque rutrum., at line 17\n";
+    $expectedOutput .= "Match found: Donec vitae sapien ut libero venenatis faucibus., at line 26\n";
+    $expectedOutput .= "Match found: Fusce vulputate eleifend sapien., at line 33\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Phasellus ullamcorper ipsum rutrum nunc., at line 43\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Donec posuere vulputate arcu., at line 59\n";
+    $expectedOutput .= "Match found: Donec elit libero, sodales nec, volutpat a, suscipit non, turpis., at line 69\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "DONE! - Found 15 occurrence(s) of 'ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_5.txt \n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Aenean vulputate eleifend tellus., at line 13\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Quisque rutrum., at line 17\n";
+    $expectedOutput .= "Match found: Donec vitae sapien ut libero venenatis faucibus., at line 26\n";
+    $expectedOutput .= "Match found: Fusce vulputate eleifend sapien., at line 33\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Phasellus ullamcorper ipsum rutrum nunc., at line 43\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Donec posuere vulputate arcu., at line 59\n";
+    $expectedOutput .= "Match found: Donec elit libero, sodales nec, volutpat a, suscipit non, turpis., at line 69\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "DONE! - Found 15 occurrence(s) of 'ut'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '14. Find Multiple with match case successful output');
+};
+
+ntest "15. Find Folder without filter", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "15. Find Folder without filter",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "et"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='15.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='15.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: folder\n";
+    $expectedOutput .= "Filter: *.*\n";
+    $expectedOutput .= "Looking for: et\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_1.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_2.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_3.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_4.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_5.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_6.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_7.ec \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_8.ec \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_9.ec \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Aenean commodo ligula eget dolor., at line 2\n";
+    $expectedOutput .= "Match found: Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus., at line 4\n";
+    $expectedOutput .= "Match found: Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem., at line 5\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Nullam dictum felis eu pede mollis pretium., at line 9\n";
+    $expectedOutput .= "Match found: Phasellus viverra nulla ut metus varius laoreet., at line 16\n";
+    $expectedOutput .= "Match found: Aenean imperdiet., at line 18\n";
+    $expectedOutput .= "Match found: etiam ultricies nisi vel augue., at line 19\n";
+    $expectedOutput .= "Match found: Nam eget dui., at line 21\n";
+    $expectedOutput .= "Match found: etiam rhoncus., at line 22\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Sed consequat, leo eget bibendum sodales, augue velit cursus nunc, quis gravida magna mi a libero., at line 32\n";
+    $expectedOutput .= "Match found: Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus., at line 34\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Nam pretium turpis et arcu., at line 38\n";
+    $expectedOutput .= "Match found: Duis arcu tortor, suscipit eget, imperdiet nec, imperdiet iaculis, ipsum., at line 39\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Nunc nonummy metus., at line 44\n";
+    $expectedOutput .= "Match found: Vestibulum volutpat pretium libero., at line 45\n";
+    $expectedOutput .= "Match found: Aenean ut eros et nisl sagittis vestibulum., at line 47\n";
+    $expectedOutput .= "Match found: Nullam nulla eros, ultricies sit amet, nonummy id, imperdiet feugiat, pede., at line 48\n";
+    $expectedOutput .= "Match found: etiam imperdiet imperdiet orci., at line 52\n";
+    $expectedOutput .= "Match found: Phasellus leo dolor, tempus non, auctor et, hendrerit quis, nisi., at line 54\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Phasellus consectetuer vestibulum elit., at line 62\n";
+    $expectedOutput .= "Match found: Aenean tellus metus, bibendum sed, posuere ac, mattis non, nunc., at line 63\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "DONE! - Found 34 occurrence(s) of 'et'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '15. Find Folder without filter successful output');
+};
+
+ntest "16. Find Folder with filter txt", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "16. Find Folder with filter txt",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'find',
+                                                             value               => "In"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='16.find']/calledProcedure/jobStep[stepName='FindText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='16.find']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/FindText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Search Mode: normal\n";
+    $expectedOutput .= "Searching In: folder\n";
+    $expectedOutput .= "Filter: *.txt\n";
+    $expectedOutput .= "Looking for: In\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_1.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Integer tincidunt., at line 10\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "Match found: Cras ultricies mi eu turpis hendrerit fringilla., at line 36\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Praesent adipiscing., at line 42\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: In turpis., at line 65\n";
+    $expectedOutput .= "Match found: Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu sollicitudin urna dolor sagittis lacus., at line 68\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 24 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_2.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Integer tincidunt., at line 10\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "Match found: Cras ultricies mi eu turpis hendrerit fringilla., at line 36\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Praesent adipiscing., at line 42\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: In turpis., at line 65\n";
+    $expectedOutput .= "Match found: Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu sollicitudin urna dolor sagittis lacus., at line 68\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 24 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_3.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Integer tincidunt., at line 10\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "Match found: Cras ultricies mi eu turpis hendrerit fringilla., at line 36\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Praesent adipiscing., at line 42\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: In turpis., at line 65\n";
+    $expectedOutput .= "Match found: Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu sollicitudin urna dolor sagittis lacus., at line 68\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 24 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_4.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Integer tincidunt., at line 10\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "Match found: Cras ultricies mi eu turpis hendrerit fringilla., at line 36\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Praesent adipiscing., at line 42\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: In turpis., at line 65\n";
+    $expectedOutput .= "Match found: Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu sollicitudin urna dolor sagittis lacus., at line 68\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 24 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_5.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Integer tincidunt., at line 10\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "Match found: Cras ultricies mi eu turpis hendrerit fringilla., at line 36\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Praesent adipiscing., at line 42\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: In turpis., at line 65\n";
+    $expectedOutput .= "Match found: Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu sollicitudin urna dolor sagittis lacus., at line 68\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 24 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Processing file: $::gTestFileDir/testdata/find/lorem_6.txt \n";
+    $expectedOutput .= "Match found: Lorem ipsum dolor sit amet, consectetuer adipiscing elit., at line 1\n";
+    $expectedOutput .= "Match found: Donec pede justo, fringilla vel, aliquet nec, vulputate eget, arcu., at line 7\n";
+    $expectedOutput .= "Match found: In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo., at line 8\n";
+    $expectedOutput .= "Match found: Integer tincidunt., at line 10\n";
+    $expectedOutput .= "Match found: Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus., at line 15\n";
+    $expectedOutput .= "Match found: Maecenas tempus, tellus eget condimentum rhoncus, sem quam semper libero, sit amet adipiscing sem neque sed ipsum., at line 23\n";
+    $expectedOutput .= "Match found: Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem., at line 24\n";
+    $expectedOutput .= "Match found: Maecenas nec odio et ante tincidunt tempus., at line 25\n";
+    $expectedOutput .= "Match found: etiam sit amet orci eget eros faucibus tincidunt., at line 28\n";
+    $expectedOutput .= "Match found: Sed fringilla mauris sit amet nibh., at line 30\n";
+    $expectedOutput .= "Match found: Nullam accumsan lorem in dui., at line 35\n";
+    $expectedOutput .= "Match found: Cras ultricies mi eu turpis hendrerit fringilla., at line 36\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In ac dui quis mi consectetuer lacinia., at line 37\n";
+    $expectedOutput .= "Match found: Integer ante arcu, accumsan a, consectetuer eget, posuere ut, mauris., at line 41\n";
+    $expectedOutput .= "Match found: Praesent adipiscing., at line 42\n";
+    $expectedOutput .= "Match found: Phasellus nec sem in justo pellentesque facilisis., at line 51\n";
+    $expectedOutput .= "Match found: Curabitur ligula sapien, tincidunt non, euismod vitae, posuere imperdiet, leo., at line 55\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod orci, ac placerat dolor lectus quis orci., at line 61\n";
+    $expectedOutput .= "Match found: Vestibulum fringilla pede sit amet augue., at line 64\n";
+    $expectedOutput .= "Match found: In turpis., at line 65\n";
+    $expectedOutput .= "Match found: Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu sollicitudin urna dolor sagittis lacus., at line 68\n";
+    $expectedOutput .= "Match found: Suspendisse pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec pellentesque velit pede quis nunc., at line 71\n";
+    $expectedOutput .= "Match found: Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Fusce id purus., at line 72\n";
+    $expectedOutput .= "Match found: Ut varius tincidunt libero., at line 73\n";
+    $expectedOutput .= "DONE! - Found 24 occurrence(s) of 'In'\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '16. Find Folder with filter txt successful output');
+};
+
+ntest "17. Extract with all parameters", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "17. Extract with all parameters",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'regex',
+                                                             value               => '((Phasellus)\s([\w]+)\s([A-Za-z ]+)\.)'
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_1.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'matches_outpsp',
+                                                             value               => "/myJob/TextEdit/systemtest/"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='17.extract']/calledProcedure/jobStep[stepName='ExtractText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='17.extract']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ExtractText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "File: $::gTestFileDir/testdata/find/lorem_1.txt\n";
+    $expectedOutput .= "Regular Expression: ((Phasellus)\\s([\\w]+)\\s([A-Za-z ]+)\\.)\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "\$1: Phasellus viverra nulla ut metus varius laoreet.\n";
+    $expectedOutput .= "\$2: Phasellus\n";
+    $expectedOutput .= "\$3: viverra\n";
+    $expectedOutput .= "\$4: nulla ut metus varius laoreet\n";
+    $expectedOutput .= "\$5: Phasellus ullamcorper ipsum rutrum nunc.\n";
+    $expectedOutput .= "\$6: Phasellus\n";
+    $expectedOutput .= "\$7: ullamcorper\n";
+    $expectedOutput .= "\$8: ipsum rutrum nunc\n";
+    $expectedOutput .= "\$9: Phasellus nec sem in justo pellentesque facilisis.\n";
+    $expectedOutput .= "\$10: Phasellus\n";
+    $expectedOutput .= "\$11: nec\n";
+    $expectedOutput .= "\$12: sem in justo pellentesque facilisis\n";
+    $expectedOutput .= "\$13: Phasellus accumsan cursus velit.\n";
+    $expectedOutput .= "\$14: Phasellus\n";
+    $expectedOutput .= "\$15: accumsan\n";
+    $expectedOutput .= "\$16: cursus velit\n";
+    $expectedOutput .= "\$17: Phasellus consectetuer vestibulum elit.\n";
+    $expectedOutput .= "\$18: Phasellus\n";
+    $expectedOutput .= "\$19: consectetuer\n";
+    $expectedOutput .= "\$20: vestibulum elit\n";
+    $expectedOutput .= "DONE!\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '17. Extract with all parameters successful output');
+};
+
+ntest "18. Extract with required parameters", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "18. Extract with required parameters",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'regex',
+                                                             value               => '((frIngilla)\s(m.{4}s))'
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/find/lorem_1.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='18.extract']/calledProcedure/jobStep[stepName='ExtractText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='18.extract']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/ExtractText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "File: $::gTestFileDir/testdata/find/lorem_1.txt\n";
+    $expectedOutput .= "Regular Expression: ((frIngilla)\\s(m.{4}s))\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "\$1: fringilla mauris\n";
+    $expectedOutput .= "\$2: fringilla\n";
+    $expectedOutput .= "\$3: mauris\n";
+    $expectedOutput .= "DONE!\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '18. Extract with required parameters successful output');
+};
+
+ntest "19. Add at the end", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "19. Add at the end",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'text',
+                                                             value               => "****** END OF FILE ******"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/add/lorem_1.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='19.add']/calledProcedure/jobStep[stepName='AddText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='19.add']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/AddText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "File: $::gTestFileDir/testdata/add/lorem_1.txt\n";
+    $expectedOutput .= "Insertion point: end\n";
+    $expectedOutput .= "Text to Add: ****** END OF FILE ******\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "DONE! - Text added successfully\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '19. Add at the end successful output');
+};
+
+ntest "20. Add at the beginning", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "20. Add at the beginning",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'text',
+                                                             value               => "****** BEGINNING OF FILE ******"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/add/lorem_1.txt"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='20.add']/calledProcedure/jobStep[stepName='AddText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='20.add']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/AddText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "File: $::gTestFileDir/testdata/add/lorem_1.txt\n";
+    $expectedOutput .= "Insertion point: beginning\n";
+    $expectedOutput .= "Text to Add: ****** BEGINNING OF FILE ******\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "DONE! - Text added successfully\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '20. Add at the beginning successful output');
+};
+
+ntest "21. Add by search", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "21. Add by search",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'text',
+                                                             value               => "****** BY SEARCH ******"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/add/lorem_1.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'search',
+                                                             value               => "Integer"
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='21.add']/calledProcedure/jobStep[stepName='AddText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='21.add']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/AddText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "File: $::gTestFileDir/testdata/add/lorem_1.txt\n";
+    $expectedOutput .= "Insertion point: search\n";
+    $expectedOutput .= "Search: Integer\n";
+    $expectedOutput .= "Text to Add: ****** BY SEARCH ******\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Found 'Integer'.  Text added!\n";
+    $expectedOutput .= "DONE! - Text added successfully\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '21. Add by search successful output');
+};
+
+ntest "22. Add by search regex", {}, sub {
+    doSetup();
+
+    # run test job
+    my $xpath = $::N->runProcedure(
+                                   $::gtestProjectName,
+                                   {
+                                      procedureName   => "22. Add by search regex",
+                                      pollInterval    => '1',
+                                      timeout         => 600,
+                                      actualParameter => [
+                                                          {
+                                                             actualParameterName => 'text',
+                                                             value               => "****** BY SEARCH REGEX******"
+                                                          },
+                                                          {
+                                                             actualParameterName => '_filePath',
+                                                             value               => "$::gTestFileDir/testdata/add/lorem_1.txt"
+                                                          },
+                                                          {
+                                                             actualParameterName => 'search',
+                                                             value               => 'Sed\sco.{3}quat'
+                                                          },
+                                                         ]
+                                   }
+                                  );
+
+    # make sure it finished
+    my $jobId     = 0;
+    my $jobStepId = 0;
+    my $status    = "";
+
+    assertOK($xpath, 'runProcedure finished');
+    if ($xpath) {
+        $jobId  = $xpath->findvalue("//jobId");
+        $status = $xpath->findvalue("//status");
+
+        assertTrue($jobId && $jobId ne "",'valid job id');
+        assertEq('completed', $status, "job $jobId complete");
+
+        #abort if job did not finish
+        if ($status ne "completed") {
+            assertOK($::N->abortJob($jobId, { force => 1 }));
+        }
+    }
+
+    # get the job details
+    $xpath = $::N->getJobDetails($jobId);
+
+    # Get the root of log files. use UNC so it works from
+    # command line as well as within a CMD step
+    my $ws = $xpath->findvalue("//workspace/winUNC");
+    if (!isWindows()) {
+        $ws = $xpath->findvalue("//workspace/unix");
+    }
+
+    # Get the name of the log file
+    my $logFileName = $ws . '/' . $xpath->findvalue("//jobStep[stepName='22.add']/calledProcedure/jobStep[stepName='AddText']/logFileName");
+
+    # Get the jobStepId
+    $jobStepId = $xpath->findvalue("//jobStep[stepName='22.add']/jobStepId");
+
+    # Read the log file and verify its contents.
+    my $data = readFile($logFileName);
+
+    # write the job details to a file in the test directory
+    writeFile("$::gCurrentTestDir/AddText.log", "====Job Details====\n$xpath->{_xml}\n====LOG====\n$data\n");
+
+    my $expectedOutput = "";
+    $expectedOutput .= "Using plugin EC-TextEdit version " . $::gPlugin_ver . "\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "File: $::gTestFileDir/testdata/add/lorem_1.txt\n";
+    $expectedOutput .= "Insertion point: search\n";
+    $expectedOutput .= "Search: Sed\\sco.{3}quat\n";
+    $expectedOutput .= "Text to Add: ****** BY SEARCH REGEX******\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+    $expectedOutput .= "Found 'Sed consequat'.  Text added!\n";
+    $expectedOutput .= "DONE! - Text added successfully\n";
+    $expectedOutput .= "---------------------------------------------------------------------\n";
+
+    assertDiff(outdent($expectedOutput), $data, '22. Add by search regex successful output');
+};
+
+1;
+
