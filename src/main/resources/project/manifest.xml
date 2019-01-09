@@ -1,0 +1,39 @@
+<?xml version='1.0' standalone='yes'?>
+<fileset>
+  <file>
+    <path>preamble.pl</path>
+    <xpath>//property[propertyName=&quot;preamble&quot;]/value</xpath>
+  </file>
+  <file>
+    <path>TextEditDriver.pm</path>
+    <xpath>//property[propertyName=&quot;TextEditDriver&quot;]/value</xpath>
+  </file>
+  <file>
+    <path>postp_matchers.pl</path>
+    <xpath>//property[propertyName=&quot;postp_matchers&quot;]/value</xpath>
+  </file>
+  <file>
+    <path>ec_setup.pl</path>
+    <xpath>//property[propertyName=&quot;ec_setup&quot;]/value</xpath>
+  </file>
+  <file>
+    <path>procedures/replace.pl</path>
+    <xpath>//step[stepName=&quot;ReplaceText&quot;]/command</xpath>
+  </file>
+  <file>
+    <path>procedures/add.pl</path>
+    <xpath>//step[stepName=&quot;AddText&quot;]/command</xpath>
+  </file>
+  <file>
+    <path>procedures/extract.pl</path>
+    <xpath>//step[stepName=&quot;ExtractText&quot;]/command</xpath>
+  </file>
+  <file>
+    <path>procedures/find.pl</path>
+    <xpath>//step[stepName=&quot;FindText&quot;]/command</xpath>
+  </file>
+  <file>
+    <path>ec_setup.pl</path>
+    <xpath>//property[propertyName=&quot;ec_setup&quot;]/value</xpath>
+  </file>
+</fileset>
